@@ -212,6 +212,7 @@ class BleServer:
         self._mtu = _ASSUMED_MTU
         self._device_path: str | None = None
         self._lock = threading.Lock()
+        self._stop_requested = threading.Event()
         self._loop: GLib.MainLoop | None = None
         self._bus: dbus.SystemBus | None = None
         self._adapter_path = ""
@@ -276,16 +277,20 @@ class BleServer:
             error_handler=lambda e: self._fatal("advertising failed", e),
         )
         self._loop = GLib.MainLoop()
-        # The GLib loop blocks Python's own signal handling; without these a
-        # `systemctl stop` would skip the teardown that restores the adapter.
-        for signum in (signal.SIGTERM, signal.SIGINT):
-            GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, self._loop.quit)
         try:
+            # The pairing timer can expire before BlueZ setup creates the loop.
+            if self._stop_requested.is_set():
+                return
+            # The GLib loop blocks Python's own signal handling; without these a
+            # `systemctl stop` would skip the teardown that restores the adapter.
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, self._loop.quit)
             self._loop.run()
         finally:
             self._teardown()
 
     def stop(self) -> None:
+        self._stop_requested.set()
         if self._loop:
             GLib.idle_add(self._loop.quit)
 
